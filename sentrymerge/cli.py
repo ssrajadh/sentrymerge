@@ -23,6 +23,7 @@ from .core import (
     build_stitch_command,
     find_sister_files,
     get_video_duration,
+    merge_votes,
     parse_tesla_filename,
     vlm_visibility_ranges,
 )
@@ -101,12 +102,15 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
               help="Gemini model for the visibility pass.")
 @click.option("--conf-threshold", default=0.3, show_default=True, type=float,
               help="Minimum VLM confidence for a detection to count.")
+@click.option("--vlm-votes", default=1, show_default=True, type=click.IntRange(min=1),
+              help="Run VLM k times per camera and majority-vote (mitigates "
+                   "non-determinism). Multiplies cost by k.")
 @click.option("-o", "--output", default="merge.mp4", show_default=True,
               type=click.Path(dir_okay=False),
               help="Output mp4 path.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug info.")
-def cli(use_last, query, image, clip_set, vlm_model, conf_threshold, output,
-        verbose):
+def cli(use_last, query, image, clip_set, vlm_model, conf_threshold, vlm_votes,
+        output, verbose):
     """Stitch a cross-camera dashcam clip from a SentrySearch result."""
     # ---- resolve query + results ----------------------------------------
     sources = sum(bool(x) for x in (use_last, query, image))
@@ -203,13 +207,19 @@ def cli(use_last, query, image, clip_set, vlm_model, conf_threshold, output,
     from google import genai
     client = genai.Client(api_key=api_key)
 
-    click.echo(f"\nRunning {vlm_model} on {len(sisters)} sister clips...")
+    vote_suffix = f", {vlm_votes} votes/camera" if vlm_votes > 1 else ""
+    click.echo(f"\nRunning {vlm_model} on {len(sisters)} sister clips"
+               f"{vote_suffix}...")
     per_cam_ranges: dict[str, list[dict]] = {}
     for cam, path in sisters.items():
-        ranges = vlm_visibility_ranges(
-            client, path, query=query_text, image_path=image_path,
-            model=vlm_model, verbose=verbose,
-        )
+        votes = [
+            vlm_visibility_ranges(
+                client, path, query=query_text, image_path=image_path,
+                model=vlm_model, verbose=verbose,
+            )
+            for _ in range(vlm_votes)
+        ]
+        ranges = merge_votes(votes) if vlm_votes > 1 else votes[0]
         per_cam_ranges[cam] = ranges
         rs = (", ".join(f"{r['start']:.1f}-{r['end']:.1f}@{r['confidence']:.2f}"
                         for r in ranges) or "— (not visible)")

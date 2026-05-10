@@ -162,6 +162,86 @@ def vlm_visibility_ranges(
 
 
 # ---------------------------------------------------------------------------
+# Multi-run majority voting (mitigates VLM non-determinism)
+# ---------------------------------------------------------------------------
+
+
+def merge_votes(votes: list[list[dict]], *, dt: float = 0.1,
+                min_votes: Optional[int] = None) -> list[dict]:
+    """Combine *k* VLM runs into a single range list via per-slot majority vote.
+
+    A slot of duration *dt* is considered visible iff at least *min_votes*
+    runs detected something covering it. ``min_votes`` defaults to the
+    majority (``ceil(k/2)``). The merged ranges are reconstructed from
+    contiguous voted-in slots; confidence is averaged over all votes that
+    covered the slot.
+    """
+    if not votes:
+        return []
+    k = len(votes)
+    if k == 1:
+        return list(votes[0])
+    if min_votes is None:
+        min_votes = (k + 1) // 2
+
+    max_end = 0.0
+    for run in votes:
+        for r in run:
+            max_end = max(max_end, r["end"])
+    if max_end <= 0:
+        return []
+
+    n_slots = int(max_end / dt) + 1
+    counts = [0] * n_slots
+    conf_sums = [0.0] * n_slots
+
+    for run in votes:
+        # Within a single run, a slot only counts once even if multiple ranges
+        # cover it (avoids inflating confidence by overlapping ranges).
+        seen: set[int] = set()
+        for r in run:
+            i0 = max(0, int(r["start"] / dt))
+            i1 = min(n_slots, int(r["end"] / dt) + 1)
+            for i in range(i0, i1):
+                if i not in seen:
+                    seen.add(i)
+                    counts[i] += 1
+                    conf_sums[i] += r["confidence"]
+
+    merged: list[dict] = []
+    in_range = False
+    start_t = 0.0
+    accum_conf = 0.0
+    accum_n = 0
+    for i in range(n_slots):
+        if counts[i] >= min_votes:
+            if not in_range:
+                start_t = i * dt
+                accum_conf = 0.0
+                accum_n = 0
+                in_range = True
+            accum_conf += conf_sums[i] / counts[i]
+            accum_n += 1
+        else:
+            if in_range:
+                merged.append({
+                    "start": start_t,
+                    "end": i * dt,
+                    "confidence": accum_conf / max(1, accum_n),
+                    "note": "",
+                })
+                in_range = False
+    if in_range:
+        merged.append({
+            "start": start_t,
+            "end": n_slots * dt,
+            "confidence": accum_conf / max(1, accum_n),
+            "note": "",
+        })
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Timeline
 # ---------------------------------------------------------------------------
 
