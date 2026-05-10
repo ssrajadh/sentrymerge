@@ -1,0 +1,29 @@
+[project]
+name = "sentrymerge"
+version = "0.1.0"
+description = "Stitch cross-camera Tesla dashcam clips of the same event using SentrySearch results + a VLM detection pass."
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "google-genai>=1.0",
+]
+
+[project.scripts]
+sentrymerge = "sentrymerge.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sentrymerge"]
+
+[dependency-groups]
+test = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
