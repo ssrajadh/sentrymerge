@@ -1,11 +1,11 @@
-"""Core SentryMerge logic: VLM detection, axis-direction ownership timeline,
-and ffmpeg stitching.
+"""Core SentryMerge logic: axis-direction ownership timeline and ffmpeg
+stitching. VLM detection itself lives in :mod:`sentrymerge.backends`.
 
 Pipeline (see sentrymerge.cli for the wiring):
 
   1. Parse SentrySearch's last_search receipt (timestamp prefix + sister files).
-  2. For each sister camera, ask Gemini Vision where the subject is visible
-     -> per-camera time ranges with confidence.
+  2. For each sister camera, call the configured VLM backend for visibility
+     ranges (Gemini / OpenAI / Qwen-local).
   3. Build an ownership timeline ordered along the Tesla front-back axis,
      direction inferred from VLM timing. Each camera owns from its first
      detection until the next camera's first detection.
@@ -13,11 +13,9 @@ Pipeline (see sentrymerge.cli for the wiring):
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -35,8 +33,6 @@ FNAME_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})"
     r"-(front|back|left_repeater|right_repeater)\.mp4$"
 )
-
-VLM_MODEL_DEFAULT = "gemini-2.5-pro"
 
 
 def parse_tesla_filename(path: str) -> tuple[Optional[str], Optional[str]]:
@@ -60,105 +56,6 @@ def find_sister_files(timestamp: str, search_dirs: Iterable[Path]) -> dict[str, 
             if cam not in sisters and f.exists():
                 sisters[cam] = f
     return sisters
-
-
-# ---------------------------------------------------------------------------
-# VLM
-# ---------------------------------------------------------------------------
-
-
-_TEXT_PROMPT_TEMPLATE = (
-    'You are watching a Tesla dashcam clip. The user is searching for: '
-    '"{query}".\n\n'
-    'Identify all time ranges (seconds from start of clip) where "{query}" is '
-    'clearly visible or occurring.\n\n'
-    'Return ONLY valid JSON of the form:\n'
-    '{{"ranges": [{{"start": <float>, "end": <float>, '
-    '"confidence": <0-1 float>, "note": "<short>"}}]}}\n\n'
-    'Rules:\n'
-    '- If never clearly visible, return {{"ranges": []}}.\n'
-    '- "confidence" reflects how well the subject matches the query.\n'
-    '- Tight intervals: only seconds where the subject is in frame and '
-    'identifiable.\n'
-)
-
-_IMAGE_PROMPT = (
-    'You are watching a Tesla dashcam clip. The user is searching for the '
-    'subject shown in the attached reference image. Identify all time ranges '
-    '(seconds from start of clip) where that subject is clearly visible.\n\n'
-    'Return ONLY valid JSON of the form:\n'
-    '{"ranges": [{"start": <float>, "end": <float>, '
-    '"confidence": <0-1 float>, "note": "<short>"}]}\n\n'
-    'Rules:\n'
-    '- If never clearly visible, return {"ranges": []}.\n'
-    '- "confidence" reflects how well the subject matches the reference image.\n'
-    '- Tight intervals: only seconds where the subject is in frame and '
-    'identifiable.\n'
-)
-
-
-def vlm_visibility_ranges(
-    client,
-    video_path: Path,
-    *,
-    query: Optional[str] = None,
-    image_path: Optional[Path] = None,
-    model: str = VLM_MODEL_DEFAULT,
-    verbose: bool = False,
-) -> list[dict]:
-    """Ask the VLM for time ranges where the subject is visible.
-
-    Provide exactly one of *query* (text) or *image_path* (reference image).
-    Returns a list of ``{"start", "end", "confidence", "note"}`` dicts.
-    """
-    if (query is None) == (image_path is None):
-        raise ValueError("exactly one of query, image_path must be set")
-
-    from google.genai import types
-
-    with open(video_path, "rb") as f:
-        video_bytes = f.read()
-    parts: list = [types.Part.from_bytes(data=video_bytes, mime_type="video/mp4")]
-
-    if query is not None:
-        prompt = _TEXT_PROMPT_TEMPLATE.format(query=query)
-    else:
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-        # Best-effort mime detection; Gemini also accepts image/jpeg by default.
-        suffix = image_path.suffix.lower()
-        mime = {
-            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-        }.get(suffix, "image/jpeg")
-        parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime))
-        prompt = _IMAGE_PROMPT
-
-    parts.append(prompt)
-
-    if verbose:
-        print(f"    VLM call: {video_path.name} "
-              f"({len(video_bytes) / 1024:.0f}KB)", file=sys.stderr)
-
-    resp = client.models.generate_content(
-        model=model,
-        contents=parts,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.0,
-        ),
-    )
-    data = json.loads(resp.text)
-    # The model occasionally drops the {"ranges": ...} wrapper and returns the
-    # bare list, despite the prompt — accept both shapes.
-    if isinstance(data, dict):
-        ranges = data.get("ranges", [])
-    elif isinstance(data, list):
-        ranges = data
-    else:
-        ranges = []
-    return [r for r in ranges if isinstance(r, dict) and "start" in r
-            and "end" in r and "confidence" in r]
 
 
 # ---------------------------------------------------------------------------

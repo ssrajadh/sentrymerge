@@ -17,15 +17,14 @@ import click
 from dotenv import load_dotenv
 
 from . import _toolkit_cache
+from .backends import BACKEND_NAMES, resolve_backend
 from .core import (
-    VLM_MODEL_DEFAULT,
     build_ownership_timeline,
     build_stitch_command,
     find_sister_files,
     get_video_duration,
     merge_votes,
     parse_tesla_filename,
-    vlm_visibility_ranges,
 )
 
 
@@ -98,8 +97,16 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
 @click.option("--clip-set", "clip_set", default=None,
               help="Force a specific Tesla timestamp prefix "
                    "(e.g. 2026-03-12_10-44-17).")
-@click.option("--vlm-model", default=VLM_MODEL_DEFAULT, show_default=True,
-              help="Gemini model for the visibility pass.")
+@click.option("--vlm-backend",
+              type=click.Choice(BACKEND_NAMES, case_sensitive=False),
+              default=None,
+              help="VLM backend. Default: auto-detect from env "
+                   "(GEMINI_API_KEY → gemini, OPENAI_API_KEY → openai, "
+                   "else qwen local).")
+@click.option("--vlm-model", default=None,
+              help="Override the backend's default model id "
+                   "(e.g. gemini-2.5-pro, gpt-4o, "
+                   "Qwen/Qwen2.5-VL-7B-Instruct).")
 @click.option("--conf-threshold", default=0.3, show_default=True, type=float,
               help="Minimum VLM confidence for a detection to count.")
 @click.option("--vlm-votes", default=1, show_default=True, type=click.IntRange(min=1),
@@ -109,8 +116,8 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
               type=click.Path(dir_okay=False),
               help="Output mp4 path.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug info.")
-def cli(use_last, query, image, clip_set, vlm_model, conf_threshold, vlm_votes,
-        output, verbose):
+def cli(use_last, query, image, clip_set, vlm_backend, vlm_model,
+        conf_threshold, vlm_votes, output, verbose):
     """Stitch a cross-camera dashcam clip from a SentrySearch result."""
     # ---- resolve query + results ----------------------------------------
     sources = sum(bool(x) for x in (use_last, query, image))
@@ -198,24 +205,20 @@ def cli(use_last, query, image, clip_set, vlm_model, conf_threshold, vlm_votes,
         click.echo(f"  {cam:<16} on_disk={on_disk}  index_score={score_str}")
 
     # ---- VLM pass -------------------------------------------------------
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        click.secho("GEMINI_API_KEY is not set.", fg="red")
-        click.echo("Set it manually or run: sentrysearch init")
+    try:
+        backend = resolve_backend(vlm_backend, model=vlm_model)
+    except (ImportError, RuntimeError, ValueError) as e:
+        click.secho(str(e), fg="red")
         sys.exit(1)
 
-    from google import genai
-    client = genai.Client(api_key=api_key)
-
     vote_suffix = f", {vlm_votes} votes/camera" if vlm_votes > 1 else ""
-    click.echo(f"\nRunning {vlm_model} on {len(sisters)} sister clips"
-               f"{vote_suffix}...")
+    click.echo(f"\nRunning {backend.name}/{backend.model} on {len(sisters)} "
+               f"sister clips{vote_suffix}...")
     per_cam_ranges: dict[str, list[dict]] = {}
     for cam, path in sisters.items():
         votes = [
-            vlm_visibility_ranges(
-                client, path, query=query_text, image_path=image_path,
-                model=vlm_model, verbose=verbose,
+            backend.detect(
+                path, query=query_text, image_path=image_path, verbose=verbose,
             )
             for _ in range(vlm_votes)
         ]
