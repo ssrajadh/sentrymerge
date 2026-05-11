@@ -12,19 +12,19 @@ dependencies = [
 [project.optional-dependencies]
 openai = ["openai>=1.40"]
 local = [
-    "torch>=2.1",
-    "transformers>=4.49",
-    "qwen-vl-utils>=0.0.8",
-    "accelerate>=0.30",
+    "torch>=2.4",
+    "transformers>=4.57",
+    "qwen-vl-utils>=0.0.11",
+    "accelerate>=0.34",
     "pillow>=10.0",
 ]
 local-quantized = [
-    "torch>=2.1",
-    "transformers>=4.49",
-    "qwen-vl-utils>=0.0.8",
-    "accelerate>=0.30",
+    "torch>=2.4",
+    "transformers>=4.57",
+    "qwen-vl-utils>=0.0.11",
+    "accelerate>=0.34",
     "pillow>=10.0",
-    "bitsandbytes>=0.43; sys_platform != 'darwin'",
+    "bitsandbytes>=0.44; sys_platform != 'darwin'",
 ]
 
 [project.scripts]

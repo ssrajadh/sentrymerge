@@ -104,9 +104,14 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
                    "(GEMINI_API_KEY → gemini, OPENAI_API_KEY → openai, "
                    "else qwen local).")
 @click.option("--vlm-model", default=None,
-              help="Override the backend's default model id "
-                   "(e.g. gemini-2.5-pro, gpt-4o, "
-                   "Qwen/Qwen2.5-VL-7B-Instruct).")
+              help="Override the backend's default model id. Accepts full "
+                   "ids (gemini-3-pro, gpt-5, Qwen/Qwen3-VL-8B-Instruct) or "
+                   "the qwen aliases `qwen8b` / `qwen4b` (which also imply "
+                   "--vlm-backend qwen). For qwen, auto-detected from "
+                   "hardware when omitted.")
+@click.option("--quantize/--no-quantize", default=None,
+              help="Force 4-bit quantization on/off for the qwen backend. "
+                   "Default: auto-detect (4-bit on NVIDIA <20GB VRAM).")
 @click.option("--conf-threshold", default=0.3, show_default=True, type=float,
               help="Minimum VLM confidence for a detection to count.")
 @click.option("--vlm-votes", default=1, show_default=True, type=click.IntRange(min=1),
@@ -116,7 +121,7 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
               type=click.Path(dir_okay=False),
               help="Output mp4 path.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug info.")
-def cli(use_last, query, image, clip_set, vlm_backend, vlm_model,
+def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
         conf_threshold, vlm_votes, output, verbose):
     """Stitch a cross-camera dashcam clip from a SentrySearch result."""
     # ---- resolve query + results ----------------------------------------
@@ -206,7 +211,7 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model,
 
     # ---- VLM pass -------------------------------------------------------
     try:
-        backend = resolve_backend(vlm_backend, model=vlm_model)
+        backend = resolve_backend(vlm_backend, model=vlm_model, quantize=quantize)
     except (ImportError, RuntimeError, ValueError) as e:
         click.secho(str(e), fg="red")
         sys.exit(1)

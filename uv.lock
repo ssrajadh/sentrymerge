@@ -1619,21 +1619,21 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", marker = "extra == 'local'", specifier = ">=0.30" },
-    { name = "accelerate", marker = "extra == 'local-quantized'", specifier = ">=0.30" },
-    { name = "bitsandbytes", marker = "sys_platform != 'darwin' and extra == 'local-quantized'", specifier = ">=0.43" },
+    { name = "accelerate", marker = "extra == 'local'", specifier = ">=0.34" },
+    { name = "accelerate", marker = "extra == 'local-quantized'", specifier = ">=0.34" },
+    { name = "bitsandbytes", marker = "sys_platform != 'darwin' and extra == 'local-quantized'", specifier = ">=0.44" },
     { name = "click", specifier = ">=8.1" },
     { name = "google-genai", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.40" },
     { name = "pillow", marker = "extra == 'local'", specifier = ">=10.0" },
     { name = "pillow", marker = "extra == 'local-quantized'", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "qwen-vl-utils", marker = "extra == 'local'", specifier = ">=0.0.8" },
-    { name = "qwen-vl-utils", marker = "extra == 'local-quantized'", specifier = ">=0.0.8" },
-    { name = "torch", marker = "extra == 'local'", specifier = ">=2.1" },
-    { name = "torch", marker = "extra == 'local-quantized'", specifier = ">=2.1" },
-    { name = "transformers", marker = "extra == 'local'", specifier = ">=4.49" },
-    { name = "transformers", marker = "extra == 'local-quantized'", specifier = ">=4.49" },
+    { name = "qwen-vl-utils", marker = "extra == 'local'", specifier = ">=0.0.11" },
+    { name = "qwen-vl-utils", marker = "extra == 'local-quantized'", specifier = ">=0.0.11" },
+    { name = "torch", marker = "extra == 'local'", specifier = ">=2.4" },
+    { name = "torch", marker = "extra == 'local-quantized'", specifier = ">=2.4" },
+    { name = "transformers", marker = "extra == 'local'", specifier = ">=4.57" },
+    { name = "transformers", marker = "extra == 'local-quantized'", specifier = ">=4.57" },
 ]
 provides-extras = ["openai", "local", "local-quantized"]
 

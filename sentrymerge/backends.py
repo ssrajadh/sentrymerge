@@ -24,7 +24,20 @@ from typing import Optional, Protocol
 
 GEMINI_DEFAULT_MODEL = "gemini-3-pro"
 OPENAI_DEFAULT_MODEL = "gpt-5"
-QWEN_DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+# Qwen3-VL model ids; resolve_backend() picks one per hardware tier via
+# detect_local_qwen_model() when --vlm-model is not specified.
+QWEN_LARGE = "Qwen/Qwen3-VL-8B-Instruct"   # 24 GB+ VRAM / 24 GB+ unified mem
+QWEN_SMALL = "Qwen/Qwen3-VL-4B-Instruct"   # 16 GB Mac / 8-12 GB NVIDIA / CPU
+QWEN_DEFAULT_MODEL = QWEN_LARGE            # fallback when detection fails
+
+# Short aliases that mirror sentrysearch's --model qwen2b/qwen8b shorthand.
+# Users can pass `--vlm-model qwen8b` instead of the full HF repo id; this
+# also implies --vlm-backend qwen (resolved in resolve_backend()).
+QWEN_MODEL_ALIASES = {
+    "qwen8b": QWEN_LARGE,
+    "qwen4b": QWEN_SMALL,
+}
 
 BACKEND_NAMES = ("gemini", "openai", "qwen")
 
@@ -262,7 +275,7 @@ class QwenBackend:
         try:
             import torch  # noqa: F401
             from transformers import (  # noqa: F401
-                Qwen2_5_VLForConditionalGeneration, AutoProcessor,
+                AutoModelForImageTextToText, AutoProcessor,
             )
         except ImportError as e:
             raise ImportError(
@@ -277,9 +290,7 @@ class QwenBackend:
         if QwenBackend._model is not None and QwenBackend._loaded_id == self.model:
             return
         import torch
-        from transformers import (
-            Qwen2_5_VLForConditionalGeneration, AutoProcessor,
-        )
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
         kwargs: dict = {}
         if self._quantize:
@@ -305,7 +316,7 @@ class QwenBackend:
             # CPU fallback — slow but functional
             kwargs["torch_dtype"] = torch.float32
 
-        QwenBackend._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        QwenBackend._model = AutoModelForImageTextToText.from_pretrained(
             self.model, **kwargs,
         )
         QwenBackend._processor = AutoProcessor.from_pretrained(self.model)
@@ -402,17 +413,74 @@ def _sample_frames_jpeg(video_path: Path, *, fps: float,
 # ---------------------------------------------------------------------------
 
 
+def detect_local_qwen_model() -> tuple[str, Optional[bool]]:
+    """Pick a Qwen3-VL model id + quantize flag based on detected hardware.
+
+    Returns ``(model_id, quantize)`` where *quantize* is True/False/None
+    (None = let the backend decide; True/False overrides).
+
+    Tiers (matches the README hardware table):
+      - NVIDIA, ≥20 GB VRAM       → 8B Instruct, bf16
+      - NVIDIA, 10–20 GB VRAM     → 8B Instruct, 4-bit (auto-quantize)
+      - NVIDIA, <10 GB VRAM       → 4B Instruct, bf16
+      - Apple Silicon, ≥24 GB RAM → 8B Instruct, fp16 MPS
+      - Apple Silicon, <24 GB RAM → 4B Instruct, fp16 MPS
+      - CPU only                  → 4B Instruct, fp32 (slow; warn upstream)
+    """
+    try:
+        import torch
+    except ImportError:
+        return QWEN_DEFAULT_MODEL, None
+
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        if vram_gb >= 20:
+            return QWEN_LARGE, False
+        if vram_gb >= 10:
+            return QWEN_LARGE, True
+        return QWEN_SMALL, False
+
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        ram_gb = _mac_unified_memory_gb()
+        return (QWEN_LARGE if ram_gb >= 24 else QWEN_SMALL), False
+
+    return QWEN_SMALL, False  # CPU fallback
+
+
+def _mac_unified_memory_gb() -> float:
+    """Total unified memory on Apple Silicon, in GB. Returns 0 on failure."""
+    try:
+        out = subprocess.check_output(
+            ["sysctl", "-n", "hw.memsize"], text=True
+        ).strip()
+        return int(out) / (1024 ** 3)
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return 0.0
+
+
 def resolve_backend(
     name: Optional[str] = None,
     *,
     model: Optional[str] = None,
+    quantize: Optional[bool] = None,
 ) -> VLMBackend:
     """Pick a VLM backend by explicit name, else auto-detect from env vars.
 
     Auto-detect order: GEMINI_API_KEY → gemini, OPENAI_API_KEY → openai,
     otherwise → qwen (local). An explicit *name* overrides auto-detection.
-    *model* overrides the backend's default model id.
+
+    *model* aliases ``qwen8b`` / ``qwen4b`` expand to the full HF repo ids
+    and imply ``name="qwen"`` (mirrors sentrysearch's ``--model qwen2b``).
+
+    For ``qwen`` with no *model* given, the model id and quantization flag
+    are picked from hardware via :func:`detect_local_qwen_model`.
     """
+    # Short qwen alias implies the qwen backend (matches sentrysearch).
+    if model is not None and model.lower() in QWEN_MODEL_ALIASES:
+        model = QWEN_MODEL_ALIASES[model.lower()]
+        if name is None:
+            name = "qwen"
+
     if name is None:
         if os.environ.get("GEMINI_API_KEY"):
             name = "gemini"
@@ -426,7 +494,12 @@ def resolve_backend(
     if name == "openai":
         return OpenAIBackend(model=model or OPENAI_DEFAULT_MODEL)
     if name == "qwen":
-        return QwenBackend(model=model or QWEN_DEFAULT_MODEL)
+        if model is None:
+            detected_model, detected_quant = detect_local_qwen_model()
+            model = detected_model
+            if quantize is None:
+                quantize = detected_quant
+        return QwenBackend(model=model, quantize=quantize)
     raise ValueError(
         f"unknown backend: {name!r} (expected one of {BACKEND_NAMES})"
     )
