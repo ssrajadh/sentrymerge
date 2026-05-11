@@ -49,7 +49,17 @@ uv tool install .
 
 For development (editable install + tests), use `uv sync --group test` instead and run commands via `uv run sentrymerge ...` / `uv run pytest`.
 
-3. Make sure `GEMINI_API_KEY` is set. SentryMerge reads it from `~/.sentrysearch/.env` (the same file `sentrysearch init` writes) or from the environment. If you've already run `sentrysearch init`, you're done.
+3. Set up API keys. SentryMerge reads from `~/.sentrysearch/.env` and the environment.
+
+   **Gemini (default backend):** run [`sentrysearch init`](https://github.com/ssrajadh/sentrysearch#init) to bootstrap `GEMINI_API_KEY` — it prompts for the key and writes the env file. Skip if you've already run it.
+
+   ```bash
+   sentrysearch init
+   ```
+
+   **OpenAI (optional):** append `OPENAI_API_KEY=sk-...` to `~/.sentrysearch/.env` manually. Then install the extra: `uv sync --extra openai`.
+
+   **Local Qwen (optional, no key needed):** `uv sync --extra local` (or `--extra local-quantized` on NVIDIA <16 GB VRAM).
 
 4. Run a search and stitch:
 
