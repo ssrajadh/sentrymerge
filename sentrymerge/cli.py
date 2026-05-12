@@ -17,7 +17,10 @@ import click
 from dotenv import load_dotenv
 
 from . import _toolkit_cache
-from .backends import BACKEND_NAMES, resolve_backend
+from .backends import (
+    BACKEND_NAMES, GEMINI_MODELS, OPENAI_MODELS, QWEN_MODEL_ALIASES,
+    resolve_backend,
+)
 from .core import (
     build_ownership_timeline,
     build_stitch_command,
@@ -104,11 +107,14 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
                    "(GEMINI_API_KEY → gemini, OPENAI_API_KEY → openai, "
                    "else qwen local).")
 @click.option("--vlm-model", default=None,
-              help="Override the backend's default model id. Accepts full "
-                   "ids (gemini-3-pro, gpt-5, Qwen/Qwen3-VL-8B-Instruct) or "
-                   "the qwen aliases `qwen8b` / `qwen4b` (which also imply "
-                   "--vlm-backend qwen). For qwen, auto-detected from "
-                   "hardware when omitted.")
+              help=(
+                  "Override the backend's default model id.\n"
+                  f"  gemini: {', '.join(GEMINI_MODELS)}\n"
+                  f"  openai: {', '.join(OPENAI_MODELS)}\n"
+                  f"  qwen:   {', '.join(QWEN_MODEL_ALIASES)} "
+                  "(aliases imply --vlm-backend qwen), or any HF repo id.\n"
+                  "Qwen auto-detects from hardware when omitted."
+              ))
 @click.option("--quantize/--no-quantize", default=None,
               help="Force 4-bit quantization on/off for the qwen backend. "
                    "Default: auto-detect (4-bit on NVIDIA <20GB VRAM).")

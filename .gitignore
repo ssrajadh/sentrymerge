@@ -8,3 +8,11 @@ dist/
 build/
 .env
 CLAUDE.md
+
+# test artifacts (footage, receipts, sweep outputs)
+package/
+results*/
+sentrymerge-for-mac.tgz
+sentrymerge-test.tgz
+merge.mp4
+scripts/

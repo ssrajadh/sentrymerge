@@ -22,8 +22,23 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 
-GEMINI_DEFAULT_MODEL = "gemini-3-pro"
-OPENAI_DEFAULT_MODEL = "gpt-5"
+GEMINI_DEFAULT_MODEL = "gemini-3-pro-preview"
+OPENAI_DEFAULT_MODEL = "gpt-5-mini"
+
+# Known-good cloud model ids, ordered from best quality to cheapest. Surfaced
+# in --vlm-model help text so users have a discoverable shortlist instead of
+# guessing model strings. Anything else still works — these are recommended,
+# not enforced.
+GEMINI_MODELS = (
+    "gemini-3-pro-preview",     # default — best temporal grounding, slower
+    "gemini-2.5-flash",         # actually-fast fallback (3-flash-preview is 3-6x
+                                # slower than 3-pro-preview as of 2026-05)
+)
+OPENAI_MODELS = (
+    "gpt-5-mini",        # default — fastest, cheapest, no misses in eval
+    "gpt-5",             # bigger sibling; sometimes overconfident, slower
+    "gpt-4o",            # older flagship — useful as a cross-family comparison
+)
 
 # Qwen3-VL model ids; resolve_backend() picks one per hardware tier via
 # detect_local_qwen_model() when --vlm-model is not specified.
@@ -243,12 +258,16 @@ class OpenAIBackend:
                 },
             })
 
-        resp = self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": content}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
+        # GPT-5 family rejects custom temperature (only default=1 is accepted);
+        # older 4-class models still support temperature=0 for stable JSON.
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+            "response_format": {"type": "json_object"},
+        }
+        if not self.model.startswith("gpt-5"):
+            kwargs["temperature"] = 0.0
+        resp = self._client.chat.completions.create(**kwargs)
         return parse_ranges_json(resp.choices[0].message.content or "")
 
 
