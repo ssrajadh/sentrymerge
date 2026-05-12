@@ -1,0 +1,55 @@
+# Fill-in-the-blank template for a new camera config.
+#
+# To contribute a config:
+#   1. Copy this file to `<system_name>.toml` (e.g. `blackvue.toml`).
+#   2. Fill in every TODO below using a real filename from your system.
+#   3. Test with: `uv run sentrymerge --cam <system_name> --last`
+#      (or `--cam /full/path/to/<system_name>.toml`).
+#
+# Files whose names start with an underscore are hidden from `--cam` choices
+# and from auto-detection, so this template won't accidentally be picked.
+#
+# Hard limit to be aware of: the stitching algorithm assumes one monotonic
+# front-back axis (cameras can be ordered along a line). Two-camera (front
+# + rear) and N-camera setups along a single axis fit. 4-corner security
+# rigs, 2x2 grids, and 360° gimbals do not — they need a different algorithm
+# we haven't built yet.
+
+# Short identifier used in `--cam <name>`. Lowercase, no spaces.
+name = "TODO_system_name"
+
+# Human-readable description shown in error messages / docs.
+description = "TODO short sentence about which dashcam this is"
+
+# Canonical camera ids used everywhere downstream — in `axis_positions`,
+# in `camera_aliases` values, and in the stitch overlay labels. Pick names
+# that read naturally (e.g. "front", "rear", "left", "right").
+cameras = ["TODO_cam_a", "TODO_cam_b"]
+
+# Regex matching one full filename. Required named groups:
+#   (?P<timestamp>...)  shared by all sister files of one event
+#   (?P<camera>...)     the per-camera distinguisher (raw, may differ from
+#                       canonical id — see camera_aliases below)
+#
+# Examples:
+#   Tesla:    '^(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(?P<camera>front|back|left_repeater|right_repeater)\.mp4$'
+#   Hypothetical front/rear:  '^(?P<timestamp>\d{8}_\d{6})_(?P<camera>F|R)\.mp4$'
+filename_pattern = 'TODO_regex'
+
+# OPTIONAL: maps the raw `camera` capture above → the canonical id used in
+# `cameras` / `axis_positions`. Omit this table entirely if your regex
+# already captures canonical ids (as Tesla does).
+#
+# Example for a system where filenames carry _F / _R suffixes but you want
+# canonical "front" / "rear":
+#   [camera_aliases]
+#   F = "front"
+#   R = "rear"
+
+# Position of each canonical camera along the front-back axis. Lower values
+# are toward the rear, higher toward the front. Cameras can share a position
+# — that's how Tesla's left_repeater and right_repeater both sit at the
+# midpoint (1); ordering between them is decided by VLM detection time.
+[axis_positions]
+TODO_cam_a = 0
+TODO_cam_b = 1

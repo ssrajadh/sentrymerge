@@ -161,6 +161,16 @@ ffmpeg work is local and free.
 - Sister files don't have to live in the same directory — SentryMerge searches every parent directory of any grouped hit.
 - Output is always 1280×720 / 30 fps / yuv420p (concat filter requires consistent SAR/fps/format across inputs).
 
+### Other dashcam systems
+
+Tesla is the only built-in config that ships verified. Other dashcam systems are supported via `--cam <name-or-path>`:
+
+- Built-in configs live in `sentrymerge/cams/*.toml`. `--cam auto` (the default) probes each built-in against your result filenames and picks the best match, falling back to Tesla if none match.
+- To contribute a config, copy `sentrymerge/cams/_example.toml` to `<system>.toml`, fill in the TODO fields, and open a PR. The template walks through the schema (cameras, filename regex, axis positions, and the optional `camera_aliases` table for filename suffixes that aren't your canonical camera ids).
+- For one-off custom configs, pass a path: `sentrymerge --cam /path/to/mycam.toml --last`.
+
+**Hard limit you should know about:** the stitching algorithm assumes a single monotonic front-back axis along which the subject's motion is ordered. Two-camera (front + rear), four-camera (Tesla), and N-camera setups along a single line all work. 4-corner security rigs, 2×2 grids, and 360° gimbals do not — they need a different axis-inference algorithm that hasn't been built. If you have such a setup and want it supported, open an issue with example filenames and intended camera topology.
+
 ## Requirements
 
 - Python 3.11+

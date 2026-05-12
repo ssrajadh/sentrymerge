@@ -17,6 +17,7 @@ import click
 from dotenv import load_dotenv
 
 from . import _toolkit_cache
+from . import cam_config as cam_module
 from .backends import (
     BACKEND_NAMES, GEMINI_MODELS, OPENAI_MODELS, QWEN_MODEL_ALIASES,
     resolve_backend,
@@ -27,7 +28,6 @@ from .core import (
     find_sister_files,
     get_video_duration,
     merge_votes,
-    parse_tesla_filename,
 )
 
 
@@ -52,16 +52,17 @@ def _open_file(path: Path) -> None:
         pass  # non-critical; the file is saved
 
 
-def _group_by_clipset(results: list[dict]) -> dict[str, list[dict]]:
-    """Group result dicts by Tesla timestamp prefix; tag each with camera."""
+def _group_by_clipset(results: list[dict],
+                      cam: cam_module.CamConfig) -> dict[str, list[dict]]:
+    """Group result dicts by timestamp prefix; tag each with camera."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for r in results:
-        ts, cam = parse_tesla_filename(r["source_file"])
+        ts, cam_id = cam.parse(r["source_file"])
         if ts is None:
             continue
         r = dict(r)  # copy so we don't mutate caller data
         r["timestamp"] = ts
-        r["camera"] = cam
+        r["camera"] = cam_id
         grouped[ts].append(r)
     return grouped
 
@@ -98,8 +99,15 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
               type=click.Path(exists=True, dir_okay=False),
               help="Use an image as the query. Mutually exclusive with --query.")
 @click.option("--clip-set", "clip_set", default=None,
-              help="Force a specific Tesla timestamp prefix "
-                   "(e.g. 2026-03-12_10-44-17).")
+              help="Force a specific timestamp prefix "
+                   "(e.g. 2026-03-12_10-44-17 for Tesla).")
+@click.option("--cam", "cam_name", default="auto", show_default=True,
+              help=(
+                  "Dashcam config: `auto` (detect from result filenames), a "
+                  f"built-in name ({', '.join(cam_module.list_builtin())}), "
+                  "or a path to a custom .toml file. Defines camera ids, "
+                  "filename pattern, and front-back axis topology."
+              ))
 @click.option("--vlm-backend",
               type=click.Choice(BACKEND_NAMES, case_sensitive=False),
               default=None,
@@ -127,9 +135,20 @@ def _search_dirs(grouped: dict[str, list[dict]], timestamp: str) -> list[Path]:
               type=click.Path(dir_okay=False),
               help="Output mp4 path.")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug info.")
-def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
-        conf_threshold, vlm_votes, output, verbose):
+def cli(use_last, query, image, clip_set, cam_name, vlm_backend, vlm_model,
+        quantize, conf_threshold, vlm_votes, output, verbose):
     """Stitch a cross-camera dashcam clip from a SentrySearch result."""
+    # cam config is loaded after results land so `--cam auto` can probe
+    # the result filenames; the rest of the pipeline gets `cam` below.
+    explicit_cam = cam_name.lower() != "auto"
+    if explicit_cam:
+        try:
+            cam = cam_module.load(cam_name)
+        except (FileNotFoundError, ValueError) as e:
+            raise click.UsageError(str(e)) from None
+    else:
+        cam = None  # filled in once we have result filenames
+
     # ---- resolve query + results ----------------------------------------
     sources = sum(bool(x) for x in (use_last, query, image))
     if sources != 1:
@@ -181,12 +200,24 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
         click.secho("No search results to merge.", fg="yellow")
         sys.exit(1)
 
+    # ---- resolve cam (auto-detection happens here) ----------------------
+    if cam is None:
+        cam = cam_module.detect_from_filenames(r["source_file"] for r in results)
+        if cam is None:
+            cam = cam_module.tesla()
+            click.secho(
+                f"--cam auto: no built-in matched the result filenames; "
+                f"falling back to {cam.name}.", fg="yellow",
+            )
+        else:
+            click.echo(f"--cam auto: detected `{cam.name}`")
+
     # ---- pick clip-set --------------------------------------------------
-    grouped = _group_by_clipset(results)
+    grouped = _group_by_clipset(results, cam)
     if not grouped:
         click.secho(
-            "No Tesla-named files in results "
-            "(expected YYYY-MM-DD_HH-MM-SS-<camera>.mp4).",
+            f"No {cam.name}-named files in results "
+            f"(expected pattern {cam.filename_re.pattern!r}).",
             fg="yellow",
         )
         sys.exit(1)
@@ -200,20 +231,21 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
     click.echo(f"Query: {label}")
     click.echo(f"Clip-set: {timestamp}")
 
-    sisters = find_sister_files(timestamp, _search_dirs(grouped, timestamp))
+    sisters = find_sister_files(timestamp, _search_dirs(grouped, timestamp), cam)
     if not sisters:
         click.secho("No sister files on disk for this clip-set.", fg="red")
         sys.exit(1)
-    click.echo(f"Sister files: {len(sisters)}/4 → {sorted(sisters)}")
+    click.echo(f"Sister files: {len(sisters)}/{len(cam.cameras)} → {sorted(sisters)}")
 
     hits_by_cam = {h["camera"]: h["similarity_score"]
                    for h in grouped[timestamp]}
+    name_w = max((len(c) for c in cam.cameras), default=8)
     click.echo("\nPer-camera index scores:")
-    for cam in ("front", "left_repeater", "right_repeater", "back"):
-        score = hits_by_cam.get(cam)
-        on_disk = "yes" if cam in sisters else "no "
+    for cam_id in cam.cameras:
+        score = hits_by_cam.get(cam_id)
+        on_disk = "yes" if cam_id in sisters else "no "
         score_str = f"{score:.3f}" if score is not None else "— (no hit)"
-        click.echo(f"  {cam:<16} on_disk={on_disk}  index_score={score_str}")
+        click.echo(f"  {cam_id:<{name_w}} on_disk={on_disk}  index_score={score_str}")
 
     # ---- VLM pass -------------------------------------------------------
     try:
@@ -226,7 +258,7 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
     click.echo(f"\nRunning {backend.name}/{backend.model} on {len(sisters)} "
                f"sister clips{vote_suffix}...")
     per_cam_ranges: dict[str, list[dict]] = {}
-    for cam, path in sisters.items():
+    for cam_id, path in sisters.items():
         votes = [
             backend.detect(
                 path, query=query_text, image_path=image_path, verbose=verbose,
@@ -234,15 +266,15 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
             for _ in range(vlm_votes)
         ]
         ranges = merge_votes(votes) if vlm_votes > 1 else votes[0]
-        per_cam_ranges[cam] = ranges
+        per_cam_ranges[cam_id] = ranges
         rs = (", ".join(f"{r['start']:.1f}-{r['end']:.1f}@{r['confidence']:.2f}"
                         for r in ranges) or "— (not visible)")
-        click.echo(f"  {cam:<16} → {rs}")
+        click.echo(f"  {cam_id:<{name_w}} → {rs}")
 
     # ---- timeline -------------------------------------------------------
     total_duration = max(get_video_duration(p) for p in sisters.values())
     timeline = build_ownership_timeline(
-        per_cam_ranges, total_duration, conf_threshold=conf_threshold,
+        per_cam_ranges, total_duration, conf_threshold=conf_threshold, cam=cam,
     )
     click.echo(f"\nDirection: {timeline.direction}")
     for w in timeline.warnings:
@@ -259,7 +291,7 @@ def cli(use_last, query, image, clip_set, vlm_backend, vlm_model, quantize,
     for seg in timeline.segments:
         click.echo(
             f"  {seg.start:5.1f}-{seg.end:5.1f}s  "
-            f"{seg.camera:<16}  conf={seg.confidence:.2f}"
+            f"{seg.camera:<{name_w}}  conf={seg.confidence:.2f}"
         )
 
     # ---- ffmpeg stitch --------------------------------------------------

@@ -88,7 +88,7 @@ def test_front_back_without_side_warns_but_keeps_both():
     tl = build_ownership_timeline(per_cam, total_duration=10.0)
     assert tl.direction == "back→front"
     assert [s.camera for s in tl.segments] == ["back", "front"]
-    assert any("no side-camera corroboration" in w for w in tl.warnings)
+    assert any("no intermediate-camera corroboration" in w for w in tl.warnings)
 
 
 def test_squeezed_camera_dropped_when_axis_order_violates_time():

@@ -1,44 +1,31 @@
 """Core SentryMerge logic: axis-direction ownership timeline and ffmpeg
-stitching. VLM detection itself lives in :mod:`sentrymerge.backends`.
+stitching. VLM detection itself lives in :mod:`sentrymerge.backends`;
+dashcam-specific knowledge (filenames, camera names, axis topology) lives
+in :mod:`sentrymerge.cam_config`.
 
 Pipeline (see sentrymerge.cli for the wiring):
 
   1. Parse SentrySearch's last_search receipt (timestamp prefix + sister files).
   2. For each sister camera, call the configured VLM backend for visibility
      ranges (Gemini / OpenAI / Qwen-local).
-  3. Build an ownership timeline ordered along the Tesla front-back axis,
-     direction inferred from VLM timing. Each camera owns from its first
-     detection until the next camera's first detection.
+  3. Build an ownership timeline ordered along the front-back axis defined
+     by the CamConfig, direction inferred from VLM timing. Each camera owns
+     from its first detection until the next camera's first detection.
   4. ffmpeg-stitch the segments with a drawtext overlay.
 """
 from __future__ import annotations
 
-import os
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-
-CAMERAS = ("front", "left_repeater", "right_repeater", "back")
-
-# Position along the Tesla front-back axis. Side cameras share position 1
-# because either side can come first depending on which side the object is on;
-# the actual side ordering is decided by VLM detection times.
-AXIS_POS = {"back": 0, "left_repeater": 1, "right_repeater": 1, "front": 2}
-
-# Tesla SentryCam filename: YYYY-MM-DD_HH-MM-SS-<camera>.mp4
-FNAME_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})"
-    r"-(front|back|left_repeater|right_repeater)\.mp4$"
-)
+from .cam_config import CamConfig, tesla
 
 
 def parse_tesla_filename(path: str) -> tuple[Optional[str], Optional[str]]:
-    """Return ``(timestamp_prefix, camera)`` for a Tesla clip path, else ``(None, None)``."""
-    m = FNAME_RE.match(os.path.basename(path))
-    return (m.group(1), m.group(2)) if m else (None, None)
+    """Back-compat shim. New code should call ``cam.parse(path)`` on a CamConfig."""
+    return tesla().parse(path)
 
 
 def fmt_mmss(seconds: float) -> str:
@@ -46,15 +33,32 @@ def fmt_mmss(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
-def find_sister_files(timestamp: str, search_dirs: Iterable[Path]) -> dict[str, Path]:
-    """Return ``{camera: Path}`` for each sister-camera file that exists on disk
-    in any of *search_dirs*. First hit per camera wins."""
+def find_sister_files(
+    timestamp: str,
+    search_dirs: Iterable[Path],
+    cam: CamConfig | None = None,
+) -> dict[str, Path]:
+    """Return ``{camera_id: Path}`` for each sister-camera file that exists on
+    disk in any of *search_dirs*. First hit per camera wins.
+
+    Searches by re-matching the cam config's regex against each candidate
+    filename rather than templating a path — handles dashcam systems whose
+    filename suffixes aren't the canonical camera id (e.g. BlackVue ``_NF``
+    → ``front`` via ``camera_aliases``).
+    """
+    cam = cam or tesla()
     sisters: dict[str, Path] = {}
     for d in search_dirs:
-        for cam in CAMERAS:
-            f = d / f"{timestamp}-{cam}.mp4"
-            if cam not in sisters and f.exists():
-                sisters[cam] = f
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            if not f.is_file():
+                continue
+            ts, cam_id = cam.parse(f)
+            if ts != timestamp or cam_id is None:
+                continue
+            if cam_id not in sisters:
+                sisters[cam_id] = f
     return sisters
 
 
@@ -162,65 +166,82 @@ def build_ownership_timeline(
     per_cam_ranges: dict[str, list[dict]],
     total_duration: float,
     conf_threshold: float = 0.3,
+    *,
+    cam: CamConfig | None = None,
 ) -> Timeline:
-    """Order cameras along the front-back axis in the direction implied by VLM
-    timing. Each camera owns from its earliest detection until the next
-    camera's earliest detection (in the chosen physical order). Cameras out of
-    order in time get squeezed to zero duration and dropped.
+    """Order cameras along the configured front-back axis in the direction
+    implied by VLM timing. Each camera owns from its earliest detection until
+    the next camera's earliest detection (in the chosen physical order).
+    Cameras out of order in time get squeezed to zero duration and dropped.
+
+    *cam* selects the dashcam topology (defaults to Tesla SentryCam). The
+    function never references hardcoded camera names — direction labels and
+    warnings are derived from the axis positions in the config.
 
     Edge cases handled:
-      - Only side cameras detect: fall back to pure temporal order.
+      - Only middle-axis cameras detect (e.g. Tesla side cams): fall back to
+        pure temporal order.
       - Only one camera detects: emit a single segment and warn.
-      - Only front + back detect (no side cam): warn but keep both — the
-        physical impossibility is logged, not silently corrected.
+      - Only the two axis endpoints detect with intermediates available
+        (e.g. Tesla front + back without a side cam): warn but keep both —
+        the physical impossibility is logged, not silently corrected.
     """
+    cam = cam or tesla()
+    axis_pos = cam.axis_pos
+
     cam_first: dict[str, dict] = {}
-    for cam, ranges in per_cam_ranges.items():
+    for c, ranges in per_cam_ranges.items():
         valid = [r for r in ranges if r["confidence"] >= conf_threshold]
         if not valid:
             continue
-        cam_first[cam] = min(valid, key=lambda r: r["start"])
+        cam_first[c] = min(valid, key=lambda r: r["start"])
 
     warnings: list[str] = []
     if not cam_first:
         return Timeline(segments=[], direction="none", warnings=warnings)
 
     if len(cam_first) == 1:
-        cam, r = next(iter(cam_first.items()))
+        c, r = next(iter(cam_first.items()))
         warnings.append(
-            f"only {cam} detected the subject (no cross-camera handoff)"
+            f"only {c} detected the subject (no cross-camera handoff)"
         )
         end = min(r["end"], total_duration)
-        seg = Segment(start=r["start"], end=end, camera=cam,
+        seg = Segment(start=r["start"], end=end, camera=c,
                       confidence=r["confidence"])
         return Timeline(segments=[seg] if end > r["start"] else [],
                         direction="single-camera", warnings=warnings)
 
     cams = list(cam_first)
-    if all(AXIS_POS[c] == 1 for c in cams):
-        # Only side cameras saw it. Direction is undefined on the front-back
-        # axis; use temporal order.
+    min_pos = min(axis_pos.values())
+    max_pos = max(axis_pos.values())
+    has_intermediate = len(set(axis_pos.values())) > 2
+
+    if all(axis_pos[c] not in (min_pos, max_pos) for c in cams):
+        # All detected cameras share a middle axis position — direction is
+        # undefined on the front-back axis; use temporal order.
         chain = sorted(cams, key=lambda c: cam_first[c]["start"])
         direction = "side-only"
     else:
         by_time = sorted(cams, key=lambda c: cam_first[c]["start"])
         earliest, latest = by_time[0], by_time[-1]
-        if AXIS_POS[earliest] <= AXIS_POS[latest]:
+        if axis_pos[earliest] <= axis_pos[latest]:
             chain = sorted(
-                cams, key=lambda c: (AXIS_POS[c], cam_first[c]["start"])
+                cams, key=lambda c: (axis_pos[c], cam_first[c]["start"])
             )
             direction = "back→front"
         else:
             chain = sorted(
-                cams, key=lambda c: (-AXIS_POS[c], cam_first[c]["start"])
+                cams, key=lambda c: (-axis_pos[c], cam_first[c]["start"])
             )
             direction = "front→back"
 
-    if set(cams) == {"back", "front"}:
+    if has_intermediate and {axis_pos[c] for c in cams} == {min_pos, max_pos}:
+        endpoint_cams = sorted(cams, key=lambda c: axis_pos[c])
         warnings.append(
-            "only back and front detected — no side-camera corroboration; "
-            "object cannot physically traverse without passing a side camera, "
-            "so one detection is likely a VLM hallucination"
+            f"only {endpoint_cams[0]} and {endpoint_cams[-1]} detected — no "
+            "intermediate-camera corroboration; object cannot physically "
+            "traverse without passing one, so one detection is likely a "
+            "VLM hallucination"
         )
 
     segments: list[Segment] = []

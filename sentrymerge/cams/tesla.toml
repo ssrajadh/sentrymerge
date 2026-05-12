@@ -1,0 +1,19 @@
+# Tesla SentryCam: 4 cameras, front-back axis with side repeaters at the middle.
+# Sister files for one event share the YYYY-MM-DD_HH-MM-SS timestamp prefix.
+name = "tesla"
+description = "Tesla SentryCam (front, back, left_repeater, right_repeater)"
+
+cameras = ["back", "left_repeater", "right_repeater", "front"]
+
+# Filename: 2026-03-12_10-44-17-front.mp4
+# Pattern must yield named groups `timestamp` and `camera`.
+filename_pattern = '^(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(?P<camera>front|back|left_repeater|right_repeater)\.mp4$'
+
+# Position along the front-back axis. Side cameras share the middle slot
+# (position 1) because either side can fire first depending on which side of
+# the car the subject is on; ordering between sides is decided by VLM time.
+[axis_positions]
+back = 0
+left_repeater = 1
+right_repeater = 1
+front = 2
