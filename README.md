@@ -1,11 +1,11 @@
 # SentryMerge
 
+Stitch a single cross-camera video of one event from a [SentrySearch](https://github.com/ssrajadh/sentrysearch) result. Frame-accurate handoffs between camera feeds, driven by a VLM visibility pass.
+
 **The Pipeline:** 
 1. [SentrySearch](https://github.com/ssrajadh/sentrysearch) (find an event in your footage)
 2. SentryMerge (auto-cut the multi-cam footage into one video that follows the subject across cameras)
 3. [SentryBlur](https://github.com/ssrajadh/sentryblur) (auto-redact sensitive information)
-
-Stitch a single cross-camera video of one event from a [SentrySearch](https://github.com/ssrajadh/sentrysearch) result. Frame-accurate handoffs between `back`, `left_repeater`, `right_repeater`, and `front` Tesla dashcam feeds, driven by a VLM visibility pass.
 
 > **Note:** Tesla's camera system is the only verified built-in today, but the cam-config system is modular — [contributions for other dashcams welcome](#other-dashcam-systems).
 
