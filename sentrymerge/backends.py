@@ -58,7 +58,7 @@ BACKEND_NAMES = ("gemini", "openai", "qwen")
 
 
 _TEXT_PROMPT_TEMPLATE = (
-    'You are watching a Tesla dashcam clip. The user is searching for: '
+    'You are watching a short video clip. The user is searching for: '
     '"{query}".\n\n'
     'Identify all time ranges (seconds from start of clip) where "{query}" is '
     'clearly visible or occurring.\n\n'
@@ -73,7 +73,7 @@ _TEXT_PROMPT_TEMPLATE = (
 )
 
 _IMAGE_PROMPT = (
-    'You are watching a Tesla dashcam clip. The user is searching for the '
+    'You are watching a short video clip. The user is searching for the '
     'subject shown in the attached reference image. Identify all time ranges '
     '(seconds from start of clip) where that subject is clearly visible.\n\n'
     'Return ONLY valid JSON of the form:\n'
