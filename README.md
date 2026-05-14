@@ -1,6 +1,14 @@
 # SentryMerge
 
+**The Pipeline:** [SentrySearch](https://github.com/ssrajadh/sentrysearch) (find an event in your footage) -> SentryMerge (auto-cut the multi-cam footage into one video that follows the subject across cameras) -> [SentryBlur]((https://github.com/ssrajadh/sentryblur)) (auto-redact sensitive information)
+
 Stitch a single cross-camera video of one event from a [SentrySearch](https://github.com/ssrajadh/sentrysearch) result. Frame-accurate handoffs between `back`, `left_repeater`, `right_repeater`, and `front` Tesla dashcam feeds, driven by a VLM visibility pass.
+
+> **Note:** Tesla's camera system is the only verified built-in today, but the cam-config system is modular — [contributions for other dashcams welcome](#other-dashcam-systems).
+
+[https://github.com/user-attachments/assets/07204533-7fb5-4335-b515-f8ae73646245](https://github.com/user-attachments/assets/07204533-7fb5-4335-b515-f8ae73646245)
+
+> **Note:** The VLM processing portion of the demo video is sped up.
 
 ## Table of Contents
 
@@ -21,7 +29,7 @@ Stitch a single cross-camera video of one event from a [SentrySearch](https://gi
 
 ## How it works
 
-SentrySearch hits land at ~30s chunk granularity — too coarse to cleanly cut between cameras as a subject passes the car. SentryMerge groups hits by Tesla timestamp, picks the best multi-camera clip-set, asks Gemini 2.5 Pro for sub-second visibility ranges per camera, infers travel direction along the front-back axis, and stitches the clips into one video with ffmpeg. The output path is written to `~/.sentrysearch/last_clip.json` so a downstream tool (viewer, redactor, sharer) can pick it up.
+SentrySearch hits land at ~30s chunk granularity — too coarse to cleanly cut between cameras as a subject passes the car. SentryMerge groups hits by Tesla timestamp, picks the best multi-camera clip-set, asks a VLM for sub-second visibility ranges per camera, infers travel direction along the front-back axis, and stitches the clips into one video with ffmpeg. The output path is written to `~/.sentrysearch/last_clip.json` so a downstream tool (viewer, redactor, sharer) can pick it up.
 
 SentryMerge does **only** the last-mile stitch. Retrieval stays in SentrySearch.
 
@@ -141,7 +149,7 @@ When only `front` and `back` detect (no side), SentryMerge keeps both segments b
 
 ## Cost
 
-Per stitch, SentryMerge issues one Gemini 2.5 Pro call per camera that has a candidate clip — typically 3-4 calls per event, each on ~30s of 480p video. With `--vlm-votes k`, multiply by `k`.
+Per stitch, SentryMerge issues one VLM call per camera that has a candidate clip — typically 3-4 calls per event, each on ~30s of 480p video. With `--vlm-votes k`, multiply by `k`.
 
 For exact pricing, see [Gemini API pricing](https://ai.google.dev/pricing). At time of writing, a single stitch is on the order of cents.
 
